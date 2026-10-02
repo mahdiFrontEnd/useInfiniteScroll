@@ -1,0 +1,166 @@
+// useInfiniteScroll.test.ts
+import { renderHook, act, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { useInfiniteScroll } from "./useInfiniteScroll";
+
+describe("useInfiniteScroll", () => {
+  const mockFetcher = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("صفحه‌ی اول رو لود می‌کنه", async () => {
+    mockFetcher.mockResolvedValue({
+      items: [{ id: 1 }, { id: 2 }],
+      hasMore: true,
+    });
+
+    const { result } = renderHook(() =>
+      useInfiniteScroll({ fetcher: mockFetcher })
+    );
+
+    expect(result.current.isLoading).toBe(true);
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.data).toEqual([{ id: 1 }, { id: 2 }]);
+    expect(result.current.hasMore).toBe(true);
+  });
+
+  it("loadMore صفحه‌ی بعدی رو لود می‌کنه", async () => {
+    mockFetcher
+      .mockResolvedValueOnce({ items: [{ id: 1 }], hasMore: true })
+      .mockResolvedValueOnce({ items: [{ id: 2 }], hasMore: true });
+
+    const { result } = renderHook(() =>
+      useInfiniteScroll({ fetcher: mockFetcher })
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => {
+      result.current.loadMore();
+    });
+
+    await waitFor(() => {
+      expect(result.current.data).toEqual([{ id: 1 }, { id: 2 }]);
+    });
+
+    expect(mockFetcher).toHaveBeenCalledTimes(2);
+    expect(mockFetcher).toHaveBeenLastCalledWith(2);
+  });
+
+  it("وقتی hasMore=false، loadMore کار نمی‌کنه", async () => {
+    mockFetcher.mockResolvedValue({
+      items: [{ id: 1 }],
+      hasMore: false,
+    });
+
+    const { result } = renderHook(() =>
+      useInfiniteScroll({ fetcher: mockFetcher })
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => {
+      result.current.loadMore();
+    });
+
+    // فقط یک بار صدا زده شده (initial load)
+    expect(mockFetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("حین loading، درخواست تکراری نمی‌زنه", async () => {
+    let resolveFn: (value: unknown) => void;
+    const promise = new Promise((resolve) => {
+      resolveFn = resolve;
+    });
+
+    mockFetcher.mockReturnValueOnce(promise);
+    mockFetcher.mockReturnValueOnce(promise);
+
+    const { result } = renderHook(() =>
+      useInfiniteScroll({ fetcher: mockFetcher })
+    );
+
+    // دو بار loadMore پشت سر هم
+    act(() => {
+      result.current.loadMore();
+      result.current.loadMore();
+    });
+
+    expect(mockFetcher).toHaveBeenCalledTimes(1); // فقط initial
+
+    act(() => {
+      resolveFn!({ items: [{ id: 1 }], hasMore: true });
+    });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+  });
+
+  it("error رو درست مدیریت می‌کنه", async () => {
+    mockFetcher.mockRejectedValue(new Error("Network error"));
+
+    const { result } = renderHook(() =>
+      useInfiniteScroll({ fetcher: mockFetcher })
+    );
+
+    await waitFor(() => {
+      expect(result.current.error).toBeInstanceOf(Error);
+    });
+
+    expect(result.current.error?.message).toBe("Network error");
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("retry دوباره تلاش می‌کنه", async () => {
+    mockFetcher
+      .mockRejectedValueOnce(new Error("Fail"))
+      .mockResolvedValueOnce({ items: [{ id: 1 }], hasMore: false });
+
+    const { result } = renderHook(() =>
+      useInfiniteScroll({ fetcher: mockFetcher })
+    );
+
+    await waitFor(() => {
+      expect(result.current.error).toBeTruthy();
+    });
+
+    act(() => {
+      result.current.retry();
+    });
+
+    await waitFor(() => {
+      expect(result.current.error).toBeNull();
+      expect(result.current.data).toEqual([{ id: 1 }]);
+    });
+
+    expect(mockFetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("روی unmount State رو آپدیت نمی‌کنه", async () => {
+    let resolveFn: (value: unknown) => void;
+    const promise = new Promise((resolve) => {
+      resolveFn = resolve;
+    });
+
+    mockFetcher.mockReturnValue(promise);
+
+    const { result, unmount } = renderHook(() =>
+      useInfiniteScroll({ fetcher: mockFetcher })
+    );
+
+    // unmount قبل از resolve
+    unmount();
+
+    act(() => {
+      resolveFn!({ items: [{ id: 1 }], hasMore: true });
+    });
+
+    // هیچ خطایی نباید بده (React warning)
+    expect(result.current.data).toEqual([]);
+  });
+});
