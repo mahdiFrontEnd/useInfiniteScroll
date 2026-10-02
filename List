@@ -1,0 +1,93 @@
+// InfiniteList.tsx
+import { useInfiniteScroll } from "./hooks/useInfiniteScroll";
+
+type Item = {
+  id: number;
+  title: string;
+  body: string;
+};
+
+async function fetchItems(page: number): Promise<{ items: Item[]; hasMore: boolean }> {
+  const res = await fetch(
+    `https://jsonplaceholder.typicode.com/posts?_page=${page}&_limit=10`
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+  const items = (await res.json()) as Item[];
+  // jsonplaceholder تا 100 تا پست داره → صفحه 10 آخرین
+  return { items, hasMore: page < 10 };
+}
+
+export function InfiniteList() {
+  const {
+    data,
+    isLoading,
+    isLoadingMore,
+    hasMore,
+    error,
+    retry,
+    sentinelRef,
+  } = useInfiniteScroll<Item>({ fetcher: fetchItems });
+
+  // ─── حالت ۱: لود اولیه ───
+  if (isLoading) {
+    return (
+      <div className="spinner-container">
+        <Spinner />
+        <p>در حال بارگذاری...</p>
+      </div>
+    );
+  }
+
+  // ─── حالت ۲: خطا ───
+  if (error && data.length === 0) {
+    return (
+      <div className="error-state">
+        <p>خطا: {error.message}</p>
+        <button onClick={retry}>تلاش مجدد</button>
+      </div>
+    );
+  }
+
+  // ─── حالت ۳: خالی ───
+  if (data.length === 0) {
+    return <div className="empty-state">هیچ آیتمی یافت نشد</div>;
+  }
+
+  // ─── حالت ۴: لیست ───
+  return (
+    <div className="infinite-list">
+      <ul>
+        {data.map((item) => (
+          <li key={item.id}>
+            <h3>{item.title}</h3>
+            <p>{item.body}</p>
+          </li>
+        ))}
+      </ul>
+
+      {/* Sentinel — IntersectionObserver اینجا وصل می‌شه */}
+      <div ref={sentinelRef} style={{ height: 1 }} />
+
+      {/* Loading more */}
+      {isLoadingMore && (
+        <div className="loading-more">
+          <Spinner size="small" />
+        </div>
+      )}
+
+      {/* خطا در loadMore */}
+      {error && data.length > 0 && (
+        <div className="error-inline">
+          <p>خطا در بارگذاری بیشتر</p>
+          <button onClick={retry}>تلاش مجدد</button>
+        </div>
+      )}
+
+      {/* پایان */}
+      {!hasMore && !isLoadingMore && (
+        <p className="end-message">همه‌ی آیتم‌ها لود شدن ✅</p>
+      )}
+    </div>
+  );
+}
