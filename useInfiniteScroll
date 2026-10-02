@@ -1,0 +1,162 @@
+// src/hooks/useInfiniteScroll.ts
+import { useCallback, useEffect, useRef, useState } from "react";
+
+// ─────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────
+
+export type Page<T> = {
+  items: T[];
+  hasMore: boolean;
+};
+
+export type Fetcher<T> = (page: number) => Promise<Page<T>>;
+
+export type UseInfiniteScrollOptions<T> = {
+  fetcher: Fetcher<T>;
+  initialPage?: number;
+};
+
+export type UseInfiniteScrollReturn<T> = {
+  data: T[];
+  isLoading: boolean;
+  isLoadingMore: boolean;
+  hasMore: boolean;
+  error: Error | null;
+  loadMore: () => void;
+  retry: () => void;
+  sentinelRef: (node: HTMLElement | null) => void;
+};
+
+// ─────────────────────────────────────────────
+// Hook
+// ─────────────────────────────────────────────
+
+export function useInfiniteScroll<T>({
+  fetcher,
+  initialPage = 1,
+}: UseInfiniteScrollOptions<T>): UseInfiniteScrollReturn<T> {
+  // ─── State ها ───
+  const [data, setData] = useState<T[]>([]);
+  const [page, setPage] = useState(initialPage);
+  const [isLoading, setIsLoading] = useState(true); // صفحه‌ی اول
+  const [isLoadingMore, setIsLoadingMore] = useState(false); // صفحات بعدی
+  const [hasMore, setHasMore] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  // ─── Refs ───
+  const isMountedRef = useRef(true);
+  const isFetchingRef = useRef(false); // جلوگیری از درخواست تکراری
+  const [sentinel, setSentinel] = useState<HTMLElement | null>(null);
+
+  // ─── fetchPage (تابع مشترک) ───
+  const fetchPage = useCallback(
+    async (pageNumber: number) => {
+      // جلوگیری از درخواست تکراری
+      if (isFetchingRef.current) return;
+      isFetchingRef.current = true;
+
+      try {
+        const result = await fetcher(pageNumber);
+
+        // اگه کامپوننت unmount شده، State رو آپدیت نکن
+        if (!isMountedRef.current) return;
+
+        setData((prev) => [...prev, ...result.items]);
+        setHasMore(result.hasMore);
+        setError(null);
+      } catch (err) {
+        if (!isMountedRef.current) return;
+        setError(err instanceof Error ? err : new Error("Unknown error"));
+      } finally {
+        if (isMountedRef.current) {
+          setIsLoading(false);
+          setIsLoadingMore(false);
+        }
+        isFetchingRef.current = false;
+      }
+    },
+    [fetcher]
+  );
+
+  // ─── loadMore ───
+  const loadMore = useCallback(() => {
+    if (isLoadingMore || isLoading || !hasMore || error) return;
+
+    setIsLoadingMore(true);
+    const nextPage = page + 1;
+    setPage(nextPage);
+    fetchPage(nextPage);
+  }, [isLoadingMore, isLoading, hasMore, error, page, fetchPage]);
+
+  // ─── retry ───
+  const retry = useCallback(() => {
+    setError(null);
+
+    // اگه داده‌ای نداریم، از اول شروع کن
+    if (data.length === 0) {
+      setIsLoading(true);
+      setPage(initialPage);
+      fetchPage(initialPage);
+    } else {
+      // اگه داده داریم، فقط صفحه‌ی فعلی رو دوباره تلاش کن
+      setIsLoadingMore(true);
+      fetchPage(page);
+    }
+  }, [data.length, initialPage, page, fetchPage]);
+
+  // ─── Initial load ───
+  useEffect(() => {
+    fetchPage(initialPage);
+  }, [initialPage, fetchPage]);
+
+  // ─── Cleanup on unmount ───
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  // ─── IntersectionObserver ───
+  useEffect(() => {
+    if (!sentinel) return;
+    if (!hasMore) return;
+    if (isLoadingMore || isLoading) return;
+    if (error) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          loadMore();
+        }
+      },
+      {
+        rootMargin: "200px", // ۲۰۰px قبل از رسیدن به انتها
+        threshold: 0,
+      }
+    );
+
+    observer.observe(sentinel);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [sentinel, hasMore, isLoadingMore, isLoading, error, loadMore]);
+
+  // ─── Callback Ref ───
+  const sentinelRef = useCallback((node: HTMLElement | null) => {
+    setSentinel(node);
+  }, []);
+
+  return {
+    data,
+    isLoading,
+    isLoadingMore,
+    hasMore,
+    error,
+    loadMore,
+    retry,
+    sentinelRef,
+  };
+}
